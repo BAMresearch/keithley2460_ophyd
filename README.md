@@ -1,5 +1,7 @@
 # keithley2460-ophyd
 
+[![CI](https://github.com/BAMresearch/keithley2460_ophyd/actions/workflows/ci.yml/badge.svg)](https://github.com/BAMresearch/keithley2460_ophyd/actions/workflows/ci.yml)
+
 An [ophyd](https://blueskyproject.io/ophyd/) Flyer for the Keithley 2460
 SourceMeter that runs finite source/measure sequences **on the instrument**.
 The host compiles a validated sequence of constant-current, constant-voltage and
@@ -131,6 +133,10 @@ uv run --locked pytest            # no test touches an instrument
 uv run --locked ruff check . && uv run --locked ruff format --check .
 uv run --locked mypy src
 ```
+
+CI (`.github/workflows/ci.yml`) runs the same on every push and pull request:
+lint and types, the tests on Python 3.11–3.14 (Linux) and 3.14 (macOS), and a
+build whose wheel must hold the packaged runtime and import on its own.
 
 Any change to `tsp/sequencer.tsp` bumps `SEQUENCER_BUILD` (a test pins the
 build to the source digest) and needs a review and a dummy-load check on the
