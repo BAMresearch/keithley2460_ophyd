@@ -1,0 +1,36 @@
+# Python and tooling
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv*/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+site/
+.DS_Store
+
+# Local instrument sessions and credentials: never commit real resources or limits
+/sessions/
+**/session-*.local.toml
+*.private.toml
+.env
+.env.*
+!.env.example
+
+# Experiment output and process state
+*.h5
+*.hdf5
+*.npz
+*.xlsx
+*.csv
+*.log
+*.pgid
+dump.rdb
+/data/
+qserver/startup/existing_plans_and_devices.yaml
+
+# Reviewed synthetic fixtures
+!tests/fixtures/*.h5

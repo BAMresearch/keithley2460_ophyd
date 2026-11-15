@@ -1,0 +1,4 @@
+# Audited sdist allowlist: package, tests, and top-level docs only.
+include README.md CHANGELOG.md LICENSE.md
+recursive-include src *.py py.typed *.tsp
+recursive-include tests *.py *.json

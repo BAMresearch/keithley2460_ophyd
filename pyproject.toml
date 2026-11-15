@@ -1,0 +1,87 @@
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "keithley2460-ophyd"
+dynamic = ["version"]
+description = "Ophyd Flyer and instrument-local finite-sequence runtime for the Keithley 2460 SourceMeter"
+readme = "README.md"
+license = "BSD-3-Clause"
+license-files = ["LICENSE.md"]
+requires-python = ">=3.11"
+dependencies = [
+    "bluesky>=1.16,<1.17",
+    "ophyd>=1.11.2,<2",
+    "event-model>=1.23,<2",
+    "numpy>=2,<3",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering",
+]
+
+[project.optional-dependencies]
+visa = ["pyvisa>=1.14,<2", "pyvisa-py>=0.7,<1"]
+# keithley2460_ophyd.testing: the Lua mock of the 2460 for offline tests.
+testing = ["lupa>=2.8,<3"]
+
+[project.urls]
+repository = "https://github.com/BAMresearch/keithley2460_ophyd"
+issues = "https://github.com/BAMresearch/keithley2460_ophyd/issues"
+
+[project.scripts]
+k2460-diagnose = "keithley2460_ophyd.commissioning:main"
+# Former name, kept so existing operator procedures keep working.
+oe-diagnose = "keithley2460_ophyd.commissioning:main"
+
+[dependency-groups]
+test = ["pytest>=8,<10", "lupa>=2.8,<3"]
+lint = ["ruff>=0.11,<1", "mypy>=1.15,<3"]
+dev = [{include-group = "test"}, {include-group = "lint"}]
+
+[tool.uv]
+required-version = ">=0.12.19"
+
+[tool.setuptools.dynamic]
+version = {attr = "keithley2460_ophyd.__version__"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+keithley2460_ophyd = ["py.typed", "tsp/*.tsp"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers -m 'not hardware'"
+markers = ["hardware: explicit bench tests requiring a 2460 and a dummy load"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["keithley2460_ophyd"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+
+[[tool.mypy.overrides]]
+module = ["bluesky.*", "ophyd.*"]
+follow_untyped_imports = true
+
+# Test support moved verbatim from the test suite; the library never imports it.
+[[tool.mypy.overrides]]
+module = ["keithley2460_ophyd.testing"]
+disallow_untyped_defs = false
+disallow_untyped_calls = false
+
+[[tool.mypy.overrides]]
+module = ["lupa.*"]
+ignore_missing_imports = true
