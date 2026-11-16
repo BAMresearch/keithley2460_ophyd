@@ -78,3 +78,109 @@ jobs:
           EOF
           wheel/bin/k2460-diagnose --help > /dev/null
           wheel/bin/oe-diagnose --help > /dev/null
+
+  # Releases (CONTRIBUTING.md), on main once the checks pass. A push that sets
+  # a new __version__ (a merged release PR) is tagged, gets a GitHub release
+  # and, with the repository variable PYPI_PUBLISH = true, goes to PyPI. Any
+  # other push opens or updates the release PR if there is anything to release.
+  tag:
+    needs: [lint, test, package]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.sha }}  # a re-run tags the commit that set the version
+      - id: tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          version() { python3 -c 'import re, sys; print(re.search(r"__version__ = \"([^\"]+)\"", sys.stdin.read()).group(1))'; }
+          VERSION=$(version < src/keithley2460_ophyd/__init__.py)
+          PREVIOUS=$(git show HEAD^1:src/keithley2460_ophyd/__init__.py | version)
+          TAG="v$VERSION"
+          if [ "$VERSION" = "0.0.0" ] || git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            echo "Nothing to tag ($TAG)."
+            exit 0
+          fi
+          if [ "$PREVIOUS" = "$VERSION" ]; then
+            echo "::error::$TAG is not tagged, but this commit did not set it: re-run the release of the commit that did."
+            exit 1
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "$TAG"
+          git push origin "$TAG"
+          python3 - "$VERSION" > "$RUNNER_TEMP/notes.md" <<'PY'
+          import re, sys
+          text = open("CHANGELOG.md").read()
+          section = re.search(rf"^## v{re.escape(sys.argv[1])}\b.*?$(.*?)(?=^## v|\Z)", text, re.M | re.S)
+          print(section.group(1).strip() if section else "See CHANGELOG.md.")
+          PY
+          gh release create "$TAG" --verify-tag --title "$TAG" --notes-file "$RUNNER_TEMP/notes.md"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+  publish:
+    needs: [tag]
+    if: needs.tag.outputs.tag != '' && vars.PYPI_PUBLISH == 'true'
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/keithley2460-ophyd/
+    permissions:
+      id-token: write  # PyPI trusted publishing
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.tag.outputs.tag }}
+      - uses: astral-sh/setup-uv@v6
+      - run: uv build
+      - uses: pypa/gh-action-pypi-publish@release/v1
+
+  release-pr:
+    needs: [tag]
+    if: needs.tag.outputs.tag == ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: main
+      - uses: astral-sh/setup-uv@v6
+      - id: next
+        run: |
+          set -eu
+          psr() { uvx --from python-semantic-release==10.7.0 semantic-release "$@"; }
+          NEXT=$(psr --noop version --print)
+          LAST=$(psr version --print-last-released 2>/dev/null || true)
+          echo "next=$NEXT, last released=${LAST:-none}"
+          if [ -z "$NEXT" ] || [ "$NEXT" = "$LAST" ]; then
+            echo "Nothing to release."
+            exit 0
+          fi
+          psr version --no-commit --no-tag --no-push --no-vcs-release --skip-build
+          echo "version=$NEXT" >> "$GITHUB_OUTPUT"
+      - if: steps.next.outputs.version != ''
+        uses: peter-evans/create-pull-request@v7
+        with:
+          branch: release/next
+          delete-branch: true
+          commit-message: "chore(release): v${{ steps.next.outputs.version }}"
+          title: "chore(release): v${{ steps.next.outputs.version }}"
+          body: |
+            Prepared by python-semantic-release: `__version__` and CHANGELOG.md.
+            Edit the changelog on this branch if needed. Merging tags
+            v${{ steps.next.outputs.version }} and creates the GitHub release
+            (and publishes to PyPI when PYPI_PUBLISH is true).
+
+            Checks do not start on this PR by themselves (it is opened with the
+            workflow token): close and reopen it to run them.

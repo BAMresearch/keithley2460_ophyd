@@ -2,8 +2,6 @@
 
 <!-- version list -->
 
-## Unreleased
-
 Initial public release of the Keithley 2460 sequencer path, extracted from an
 internal development repository:
 
