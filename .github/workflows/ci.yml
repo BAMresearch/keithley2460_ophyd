@@ -150,6 +150,7 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+      actions: write  # to start CI on the release branch
     steps:
       - uses: actions/checkout@v4
         with:
@@ -170,6 +171,7 @@ jobs:
           psr version --no-commit --no-tag --no-push --no-vcs-release --skip-build
           echo "version=$NEXT" >> "$GITHUB_OUTPUT"
       - if: steps.next.outputs.version != ''
+        id: pr
         uses: peter-evans/create-pull-request@v7
         with:
           branch: release/next
@@ -182,5 +184,14 @@ jobs:
             v${{ steps.next.outputs.version }} and creates the GitHub release
             (and publishes to PyPI when PYPI_PUBLISH is true).
 
-            Checks do not start on this PR by themselves (it is opened with the
-            workflow token): close and reopen it to run them.
+            Checks run from a CI run this workflow starts on the release branch
+            (checks of a PR opened with the workflow token do not start by themselves). If they
+            are missing, run CI on release/next from the Actions tab.
+      # GitHub does not start (or holds for approval) the checks of a PR opened with
+      # the workflow token, but allows a workflow_dispatch run on its branch, whose
+      # checks report on the PR's head commit.
+      - if: steps.pr.outputs.pull-request-operation == 'created' || steps.pr.outputs.pull-request-operation == 'updated'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh workflow run ci.yml --ref release/next
