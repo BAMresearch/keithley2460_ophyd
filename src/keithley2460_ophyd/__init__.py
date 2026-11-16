@@ -42,7 +42,7 @@ from .sequencer_runtime import SEQUENCER_ABI, SEQUENCER_BUILD, sequencer_package
 from .state import DeviceState
 from .steps import DEFAULT_FAST_INTERVAL_S, cc_step, cv_step, rest_step, two_phase_sampling
 
-__version__ = "0.0.0"  # set by semantic-release in the release PR
+__version__ = "0.1.0"  # set by semantic-release in the release PR
 
 __all__ = [
     "DEFAULT_FAST_INTERVAL_S",
