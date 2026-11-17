@@ -26,8 +26,10 @@ configured in `pyproject.toml`):
    minor version, `fix` and `perf` a patch (major versions only after 1.0).
    It sets `__version__` and adds the version's section to `CHANGELOG.md`;
    edit the notes on its branch if needed.
-2. Checks do not start on that PR by themselves (it is opened with the workflow
-   token): close and reopen it, then merge it.
+2. The same job starts CI on the release branch, whose checks appear on the PR
+   (checks of a PR opened with the workflow token do not start by themselves).
+   If they are missing, run CI on `release/next` from the Actions tab. Then
+   merge it.
 3. The merge tags `vX.Y.Z` and creates the GitHub release from the changelog
    section. With the repository variable `PYPI_PUBLISH` set to `true` (and a
    PyPI trusted publisher for this repository's `ci.yml`, environment `pypi`),
