@@ -7,6 +7,7 @@ model/simulator installation usable without the ``visa`` extra.
 
 from __future__ import annotations
 
+import logging
 import re
 from collections.abc import Callable
 from contextlib import suppress
@@ -32,7 +33,10 @@ from .validation import integer, number, text
 
 CommandLanguage = Literal["SCPI", "TSP"]
 
+logger = logging.getLogger(__name__)
+
 _VISA_TIMEOUT_ERROR = -1073807339
+_MAX_OPEN_ATTEMPTS = 5
 _MAX_CONFIGURED_RESPONSE_BYTES = 16 * 1024 * 1024
 _MAX_CONFIGURED_COMMAND_BYTES = 1024 * 1024
 _TOKEN_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+-]*")
@@ -75,6 +79,9 @@ class VisaTransportConfig:
     resource_name: str
     backend: str
     open_timeout_ms: int = 3_000
+    # Opening sends nothing, so an open that timed out is tried again (an idle
+    # 2460 can miss the first connect); I/O is never retried.
+    open_attempts: int = 2
     io_timeout_ms: int = 3_000
     read_termination: str = "\n"
     write_termination: str = "\n"
@@ -90,12 +97,15 @@ class VisaTransportConfig:
             text(getattr(self, name), name)
         for name in (
             "open_timeout_ms",
+            "open_attempts",
             "io_timeout_ms",
             "chunk_size_bytes",
             "max_response_bytes",
             "max_command_bytes",
         ):
             integer(getattr(self, name), name)
+        if self.open_attempts > _MAX_OPEN_ATTEMPTS:
+            raise ValidationError(f"open_attempts must not exceed {_MAX_OPEN_ATTEMPTS}")
         if self.max_response_bytes > _MAX_CONFIGURED_RESPONSE_BYTES:
             raise ValidationError(
                 f"max_response_bytes must not exceed {_MAX_CONFIGURED_RESPONSE_BYTES}"
@@ -215,8 +225,10 @@ def parse_source_output_enabled(response: str) -> bool:
 class PyVisaKeithley2460Transport:
     """One-owner VISA session with whole-transaction locking and hard bounds.
 
-    No operation is retried. Any I/O failure invalidates and closes the session
-    so a partial or stale reply cannot be consumed by a later transaction.
+    No I/O is retried. Any I/O failure invalidates and closes the session so a
+    partial or stale reply cannot be consumed by a later transaction. Only
+    opening the session, which sends nothing, is tried again after a timeout
+    (``open_attempts``).
     """
 
     def __init__(
@@ -274,16 +286,10 @@ class PyVisaKeithley2460Transport:
             self._command_language = None
             self._backend_description = None
             manager: _ResourceManager | None = None
+            name = self.config.resource_name
             try:
                 manager = self._factory(self.config.backend)
-                resource = manager.open_resource(
-                    self.config.resource_name,
-                    open_timeout=self.config.open_timeout_ms,
-                    timeout=self.config.io_timeout_ms,
-                    read_termination=self.config.read_termination,
-                    write_termination=self.config.write_termination,
-                    chunk_size=self.config.chunk_size_bytes,
-                )
+                resource = self._open_locked(manager)
             except Exception as exc:
                 if manager is not None:
                     with suppress(Exception):
@@ -291,9 +297,13 @@ class PyVisaKeithley2460Transport:
                 if isinstance(exc, TransportError):
                     raise
                 if _is_timeout(exc):
-                    raise TransportTimeoutError("Timed out opening VISA resource") from exc
+                    raise TransportTimeoutError(
+                        f"Timed out opening VISA resource {name!r}: "
+                        f"{self.config.open_attempts} attempt(s) of "
+                        f"{self.config.open_timeout_ms} ms ({exc})"
+                    ) from exc
                 raise TransportConnectionError(
-                    f"Could not open VISA resource {self.config.resource_name!r}"
+                    f"Could not open VISA resource {name!r}: {exc}"
                 ) from exc
 
             self._manager = manager
@@ -319,6 +329,30 @@ class PyVisaKeithley2460Transport:
                 raise
             self._identity = identity
             self._command_language = language
+
+    def _open_locked(self, manager: _ResourceManager) -> _MessageResource:
+        """Open the session; an open that timed out is tried again (nothing was sent)."""
+        attempt = 1
+        while True:
+            try:
+                return manager.open_resource(
+                    self.config.resource_name,
+                    open_timeout=self.config.open_timeout_ms,
+                    timeout=self.config.io_timeout_ms,
+                    read_termination=self.config.read_termination,
+                    write_termination=self.config.write_termination,
+                    chunk_size=self.config.chunk_size_bytes,
+                )
+            except Exception as exc:
+                if attempt >= self.config.open_attempts or not _is_timeout(exc):
+                    raise
+                logger.warning(
+                    "Opening %s timed out (attempt %d of %d); trying again",
+                    self.config.resource_name,
+                    attempt,
+                    self.config.open_attempts,
+                )
+                attempt += 1
 
     def write(self, command: str) -> None:
         """Send one mutation once; an uncertain delivery is never replayed."""
@@ -520,4 +554,8 @@ def _is_timeout(exc: Exception) -> bool:
     if isinstance(exc, TimeoutError):
         return True
     error_code = getattr(exc, "error_code", None)
-    return bool(error_code == _VISA_TIMEOUT_ERROR)
+    if error_code is not None:
+        return bool(error_code == _VISA_TIMEOUT_ERROR)
+    # pyvisa-py reports a socket open that timed out as a plain Exception,
+    # "could not connect: -1073807339" (VI_ERROR_TMO), without an error_code.
+    return str(exc) == f"could not connect: {_VISA_TIMEOUT_ERROR}"

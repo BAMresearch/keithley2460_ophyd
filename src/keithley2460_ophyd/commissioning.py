@@ -138,6 +138,9 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--resource", required=True, help="Explicit PyVISA resource name")
     parser.add_argument("--backend", required=True, help="Explicit PyVISA backend, for example @py")
     parser.add_argument("--open-timeout-ms", type=int, default=3_000)
+    parser.add_argument(
+        "--open-attempts", type=int, default=2, help="opens tried after a timeout (nothing is sent)"
+    )
     parser.add_argument("--io-timeout-ms", type=int, default=3_000)
     parser.add_argument("--chunk-size-bytes", type=int, default=4_096)
     parser.add_argument("--max-response-bytes", type=int, default=65_536)
@@ -152,6 +155,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             resource_name=args.resource,
             backend=args.backend,
             open_timeout_ms=args.open_timeout_ms,
+            open_attempts=args.open_attempts,
             io_timeout_ms=args.io_timeout_ms,
             chunk_size_bytes=args.chunk_size_bytes,
             max_response_bytes=args.max_response_bytes,

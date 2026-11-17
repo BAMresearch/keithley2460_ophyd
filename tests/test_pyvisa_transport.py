@@ -91,15 +91,24 @@ class FakeResource:
 
 
 class FakeManager:
-    def __init__(self, resource: FakeResource, *, open_error: Exception | None = None) -> None:
+    def __init__(
+        self,
+        resource: FakeResource,
+        *,
+        open_error: Exception | None = None,
+        open_errors: tuple[Exception, ...] = (),
+    ) -> None:
         self.resource = resource
         self.open_error = open_error
+        self.open_errors = deque(open_errors)  # raised by the first opens, in order
         self.open_calls: list[tuple[str, dict[str, object]]] = []
         self.closed = False
         self.visalib = "fake-visa-library"
 
     def open_resource(self, resource_name: str, **kwargs: object) -> FakeResource:
         self.open_calls.append((resource_name, kwargs))
+        if self.open_errors:
+            raise self.open_errors.popleft()
         if self.open_error is not None:
             raise self.open_error
         for name in ("timeout", "read_termination", "write_termination", "chunk_size"):
@@ -369,6 +378,71 @@ def test_connect_open_failure_is_typed_and_closes_manager():
     with pytest.raises(TransportConnectionError):
         transport.connect()
     assert manager.closed and not transport.connected
+
+
+# pyvisa-py's report of a socket open that timed out (VI_ERROR_TMO), as on the
+# bench after the 2460 was idle (13 and 17 Nov 2026).
+PYVISA_PY_OPEN_TIMEOUT = "could not connect: -1073807339"
+
+
+@pytest.mark.parametrize(
+    "timeout",
+    [
+        Exception(PYVISA_PY_OPEN_TIMEOUT),
+        FakeVisaError("VI_ERROR_TMO", -1073807339),
+        TimeoutError("timed out"),
+    ],
+)
+def test_an_open_that_timed_out_is_tried_again(timeout, caplog):
+    resource = FakeResource(IDENTITY, b"SCPI\n")
+    manager = FakeManager(resource, open_errors=(timeout,))
+    transport = PyVisaKeithley2460Transport(config(), resource_manager_factory=FakeFactory(manager))
+
+    transport.connect()
+
+    assert transport.connected and len(manager.open_calls) == 2
+    assert resource.writes == ["*IDN?", "*LANG?"]  # nothing sent before the open succeeded
+    assert "timed out (attempt 1 of 2)" in caplog.text
+
+
+def test_opens_that_keep_timing_out_fail_typed_with_the_cause():
+    timeouts = tuple(Exception(PYVISA_PY_OPEN_TIMEOUT) for _ in range(3))
+    manager = FakeManager(FakeResource(), open_errors=timeouts)
+    transport = PyVisaKeithley2460Transport(
+        config(open_attempts=3, open_timeout_ms=7_000),
+        resource_manager_factory=FakeFactory(manager),
+    )
+    with pytest.raises(TransportTimeoutError, match=r"3 attempt\(s\) of 7000 ms.*-1073807339"):
+        transport.connect()
+    assert len(manager.open_calls) == 3 and manager.closed and not transport.connected
+
+
+@pytest.mark.parametrize(
+    "error",
+    [OSError("no route"), Exception("could not connect: -1073807343"), FakeVisaError("x", -1)],
+)
+def test_other_open_failures_are_not_retried_and_name_the_cause(error):
+    manager = FakeManager(FakeResource(), open_errors=(error,))
+    transport = PyVisaKeithley2460Transport(config(), resource_manager_factory=FakeFactory(manager))
+    with pytest.raises(TransportConnectionError, match="Could not open VISA resource .*: "):
+        transport.connect()
+    assert len(manager.open_calls) == 1 and manager.closed
+
+
+def test_one_open_attempt_means_no_retry():
+    manager = FakeManager(FakeResource(), open_errors=(TimeoutError("t"),))
+    transport = PyVisaKeithley2460Transport(
+        config(open_attempts=1), resource_manager_factory=FakeFactory(manager)
+    )
+    with pytest.raises(TransportTimeoutError):
+        transport.connect()
+    assert len(manager.open_calls) == 1
+
+
+@pytest.mark.parametrize("attempts", [0, 6, True, 1.5])
+def test_open_attempts_are_bounded(attempts):
+    with pytest.raises(ValidationError):
+        config(open_attempts=attempts)
 
 
 def test_runtime_upload_rejects_every_source_except_packaged_artifact():
