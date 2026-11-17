@@ -247,7 +247,9 @@ takes `DELAY d → MEASURE → limit/counter blocks` per sample:
   read by the host, unless an explicit discard naming that run is given.
 - Never auto-retry a mutation whose delivery is uncertain; a timed-out query
   invalidates the session and recovery starts with inspection (existing
-  transport behaviour).
+  transport behaviour). Only opening the session, which sends nothing, is
+  tried again after a timeout (`open_attempts`, default 2): an idle 2460 can
+  miss the first connect.
 - Every line the host sends is a call to a packaged runtime function with
   numeric/whitelisted arguments, < 900 characters. No user TSP.
 
