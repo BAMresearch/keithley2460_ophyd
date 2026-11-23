@@ -264,12 +264,36 @@ class SequencerProgram:
         return result
 
 
-# With a fixed measure range the 2460 forces the source limit into a window
-# around it (5 Nov probe: 105 uA raised to 1.06 mA on the 10 mA range, event
-# 5076, which fails the upload check). A CV hold's own current limit is
-# therefore raised to at least this fraction of its measure range; the exact
-# minimum (about 10.6 %) is from that one probe, not from the manual.
+# With a fixed measure range the limit "must be 10.6% or higher of the
+# measurement range" (Reference Manual Rev. C, smu.source.xlimit.level,
+# p. 14-194); otherwise the 2460 changes it and logs event 5076, which fails
+# the upload check (5 Nov probe: 105 uA became 1.06 mA on the 10 mA range).
+# All CV holds of a sequence share one current measure range, so whichever
+# hold's limit is active when a measure entry is stored or recalled, it fits;
+# a hold limit below this fraction of that range is refused, not changed.
 ILIMIT_MIN_FRACTION = 0.11
+ILIMIT_MIN_A = 1e-6  # smu.source.ilimit.level: 1 uA to 7.35 A (same page)
+
+
+def _hold_range(sequence: Sequence, limits: SafetyLimits, profile: SequencerProfile) -> float:
+    """The current measure range shared by the sequence's voltage steps (0.0: none)."""
+    holds = [(i, s) for i, s in enumerate(sequence.steps) if s.mode == StepMode.VOLTAGE]
+    if not holds:
+        return 0.0
+    largest = max(limits.i_max_abs if s.i_limit is None else s.i_limit for _, s in holds)
+    hold_range = _range(profile.current_ranges_a, largest, "current measure")
+    for index, step in holds:
+        if step.i_limit is None:
+            continue
+        if step.i_limit < ILIMIT_MIN_A:
+            raise ValidationError(f"step {index}: i_limit is below the 2460's 1 uA minimum")
+        if step.i_limit < ILIMIT_MIN_FRACTION * hold_range:
+            raise ValidationError(
+                f"step {index}: i_limit {step.i_limit:g} A is below 11 % of the "
+                f"{hold_range:g} A current measure range of the CV holds; the 2460 would "
+                "change it (give at least 11 % of the range, or a value on the range below)"
+            )
+    return hold_range
 
 
 def _range(ranges: tuple[float, ...], level: float, name: str) -> float:
@@ -366,6 +390,7 @@ def compile_program(
         if any(s.mode == StepMode.VOLTAGE for s in sequence.steps)
         else 0.0
     )
+    hold_range = _hold_range(sequence, limits, profile)
     repeat = sequence.repeat
     settle_first = (
         profile.start_on_lowest_range
@@ -375,18 +400,7 @@ def compile_program(
     for index, step in enumerate(sequence.steps):
         mode = _source_mode(step.mode)
         is_current = mode == "current"
-        ilimit = limits.i_max_abs
-        current_measure_range = _range(profile.current_ranges_a, ilimit, "current measure")
-        if not is_current and step.i_limit is not None:
-            current_measure_range = _range(
-                profile.current_ranges_a, step.i_limit, "current measure"
-            )
-            ilimit = max(step.i_limit, ILIMIT_MIN_FRACTION * current_measure_range)
-            if ilimit > limits.i_max_abs:
-                raise ValidationError(
-                    f"step {index}: i_limit {step.i_limit:g} A needs at least {ilimit:g} A on "
-                    f"the {current_measure_range:g} A range, above i_max_abs"
-                )
+        ilimit = limits.i_max_abs if step.i_limit is None else step.i_limit
         source = SourceEntry(
             mode,
             step.level,
@@ -404,7 +418,7 @@ def compile_program(
                 "voltage" if is_current else "current",
                 _range(profile.voltage_ranges_v, vlimit, "voltage measure")
                 if is_current
-                else current_measure_range,
+                else hold_range,
                 phase.nplc,
             )
             if measure not in measures:

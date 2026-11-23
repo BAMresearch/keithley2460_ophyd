@@ -67,8 +67,9 @@ Set once per run, output OFF, before building lists:
   range: current source range = smallest range ≥ max |I| of current steps;
   voltage measure range = smallest ≥ `vlimit` (a smaller measure range clamps
   the limit); for voltage steps: voltage source range = smallest ≥ max |V|
-  of voltage steps, current measure range ≥ `i_max_abs`, or ≥ the step's
-  `i_limit` when it has one. A 0–2.5 V window (vlimit 2.6 V) therefore
+  of voltage steps, current measure range ≥ `i_max_abs`, or ≥ the largest
+  `i_limit` of the voltage steps when they have one (one range for all of
+  them). A 0–2.5 V window (vlimit 2.6 V) therefore
   measures on the 7 V range.
 - Compliance: current steps `vlimit = max(|v_min_abs|, |v_max_abs|) + vlimit_margin_v`
   (default 0.1 V, so the instrument-local cutoff fires before compliance shapes
@@ -77,9 +78,15 @@ Set once per run, output OFF, before building lists:
   of the CC step before it continues at that current when the CC step ended on
   its time limit away from the hold voltage, instead of jumping to it at
   `i_max_abs` (seen 20 Nov: 100 µA after a 24 µA CC step). With a fixed
-  measure range the 2460 keeps the limit within a window of that range (5 Nov
-  probe: 105 µA became 1.06 mA on the 10 mA range), so an `i_limit` below 11 %
-  of its range is raised to 11 % (the exact minimum is unverified).
+  measure range the limit "must be 10.6% or higher of the measurement range"
+  (Reference Manual Rev. C, `smu.source.xlimit.level`); otherwise the 2460
+  changes it and logs event 5076 (5 Nov probe: 105 µA became 1.06 mA on the
+  10 mA range). All voltage steps of a sequence therefore share one current
+  measure range, so the limit that is active when a measure entry is stored or
+  recalled always fits, and an `i_limit` below 11 % of that range, or below
+  the 2460's 1 µA minimum, is refused. A taper above `i_limit` is allowed (it
+  ends the hold at its first reading); `i_max_abs` bounds it. Older versions of
+  this package cannot decode a sequence with `i_limit` (unknown field).
 - Auto-zero OFF for all entries, `smu.measure.autozero.once()` at prepare.
 - Readback ON (source value is measured, not the setpoint).
 - Digital lines (session config, defaults from `Keithley2460Config`): marker

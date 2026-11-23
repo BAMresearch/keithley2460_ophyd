@@ -643,17 +643,44 @@ def test_cv_hold_with_its_own_current_limit():
     assert narrow.measures[narrow.steps[0].phases[0].measure_entry - 1].range == 1e-5
 
 
-def test_cv_current_limit_is_raised_to_the_window_of_its_measure_range():
-    # 10.3 uA is measured on the 100 uA range, where the 2460 accepts a limit
-    # of about 10.6 % of the range or more (5 Nov probe): raised to 11 uA.
+def test_cv_limits_outside_the_window_of_the_shared_measure_range_are_refused():
+    # The limit must be 10.6 % or more of a fixed measure range (Reference
+    # Manual, smu.source.xlimit.level); the compiler refuses rather than changes.
     limits = SafetyLimits(0, 1, 1e-3, 1e5, 10**6)
-    p = compile_program(Sequence((cv_step(0.5, 1e-6, 10, Sampling(1), i_limit=10.3e-6),)), limits)
-    assert p.sources[0].limit == pytest.approx(11e-6)
-    with pytest.raises(ValidationError, match="above i_max_abs"):
+    with pytest.raises(ValidationError, match="below 11 % of the 0.0001 A current measure range"):
+        compile_program(Sequence((cv_step(0.5, 1e-6, 10, Sampling(1), i_limit=10.3e-6),)), limits)
+    # Two holds share one range: 5 uA is too small for the 100 uA range of 50 uA.
+    with pytest.raises(ValidationError, match="step 0: i_limit 5e-06 A is below 11 %"):
         compile_program(
-            Sequence((cv_step(0.5, 1e-6, 10, Sampling(1), i_limit=10.3e-6),)),
-            replace(limits, i_max_abs=10.5e-6),
+            Sequence(
+                (
+                    cv_step(0.5, 1e-6, 10, Sampling(1), i_limit=5e-6),
+                    cv_step(0.5, 1e-6, 10, Sampling(1), i_limit=50e-6),
+                )
+            ),
+            limits,
         )
+    shared = compile_program(
+        Sequence(
+            (
+                cv_step(0.5, 1e-6, 10, Sampling(1), i_limit=20e-6),
+                cv_step(0.5, 1e-6, 10, Sampling(1), i_limit=50e-6),
+            )
+        ),
+        limits,
+    )
+    assert [s.limit for s in shared.sources] == [20e-6, 50e-6]
+    assert [m.range for m in shared.measures] == [1e-4]
+    with pytest.raises(ValidationError, match="1 uA minimum"):
+        compile_program(Sequence((cv_step(0.5, 1e-7, 10, Sampling(1), i_limit=0.5e-6),)), limits)
+
+
+def test_cc_only_sequences_need_no_current_measure_range():
+    # Review (brief 21): the hold range must not be required without a hold.
+    limits = SafetyLimits(0, 1, 1e-3, 1e5, 10**6)
+    profile = SequencerProfile(current_ranges_a=(1e-6, 1e-5, 1e-4))
+    program = compile_program(Sequence((cc_step(1e-5, 0.9, 10, Sampling(1)),)), limits, profile)
+    assert program.sources[0].limit == pytest.approx(1.1)
 
 
 def test_cv_taper_above_the_hold_limit_is_allowed_up_to_i_max_abs():
