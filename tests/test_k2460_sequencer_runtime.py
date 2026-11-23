@@ -72,7 +72,22 @@ smu.measure = setmetatable({ autozero = {}, configlist = {
         table.insert(meas_store, { func = meas.func, src = src.func, range = meas.range,
             nplc = meas.nplc, sense = meas.sense, autozero = smu.measure.autozero.enable })
     end,
-} }, { __index = meas, __newindex = meas })
+} }, { __index = meas, __newindex = function(t, k, v)
+    meas[k] = v
+    -- A fixed current measure range moves an active current limit outside its
+    -- window and logs event 5076: below 10.6 % of the range (Reference Manual
+    -- Rev. C, smu.source.xlimit.level), above about 105 % (5 Nov probe, seen
+    -- for the voltage limit: 21 V became 2.1 V on 2 V; assumed for current).
+    if k == "range" and meas.func == smu.FUNC_DC_CURRENT
+            and src.func == smu.FUNC_DC_VOLTAGE then
+        local limit = smu.source.ilimit.level
+        if limit > 0 and (limit < 0.106 * v or limit > 1.05 * v) then
+            rec("event5076", limit, v)
+            if limit < 0.106 * v then smu.source.ilimit.level = 0.106 * v
+            else smu.source.ilimit.level = 1.05 * v end
+        end
+    end
+end })
 
 model_state = "trigger.STATE_EMPTY"
 blocks = {}
@@ -530,3 +545,42 @@ def test_begin_refuses_more_blocks_than_the_firmware_takes(lua):
     assert g.src.output == "smu.OFF"
     g.oe_seq_buf.n = 0  # records read; 63 blocks is accepted
     build(lua, n_blocks=63)
+
+
+def events_5076(lua):
+    return [entry for entry in lua.globals().log.values() if entry[1] == "event5076"]
+
+
+def test_a_hold_measure_range_that_does_not_fit_the_active_limit_logs_5076(lua):
+    # Two holds limited to 5 and 50 uA, each measured on its own range (as a
+    # first version of the per-hold limit compiled them): storing the 10 uA
+    # measure entry while the 50 uA limit is active moves the limit (review,
+    # brief 21).
+    g = build(lua, n_src=2, n_meas=2)
+    g.oe_seq_source(1, 2, 0.005, 0.2, 5e-6)
+    g.oe_seq_source(2, 2, 0.005, 0.2, 5e-5)
+    g.oe_seq_measure(1, 2, 1e-5, 1)
+    assert events_5076(lua)
+
+
+def test_compiled_holds_share_one_measure_range_and_log_no_5076(lua):
+    from keithley2460_ophyd.models import SafetyLimits, Sampling, Sequence
+    from keithley2460_ophyd.sequencer import compile_program
+    from keithley2460_ophyd.steps import cc_step, cv_step, rest_step
+
+    limits = SafetyLimits(0.0, 0.3, 1e-4, 1e5, 10**6)
+    sequence = Sequence(
+        (
+            cc_step(-20e-6, 0.005, 10, Sampling(1)),
+            cv_step(0.005, 5e-6, 10, Sampling(1), i_limit=20e-6),
+            rest_step(5, Sampling(1)),
+            cc_step(50e-6, 0.2, 10, Sampling(1)),
+            cv_step(0.2, 5e-6, 10, Sampling(1), i_limit=50e-6),
+        )
+    )
+    program = compile_program(sequence, limits)
+    configure(lua, v_min=0.0, v_max=0.3, i_max=1e-4, vlimit_max=0.4)
+    for call in program.runtime_calls():
+        lua.execute(call)
+    assert out(lua)[-1].startswith("OK")
+    assert not events_5076(lua)

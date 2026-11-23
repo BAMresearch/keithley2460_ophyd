@@ -56,6 +56,8 @@ class Step:
     i_abs_min: float | None = None
     on_cutoff: CutoffAction = CutoffAction.NEXT
     label: str = ""
+    # VOLTAGE only: the source's current limit; None uses the session's i_max_abs.
+    i_limit: float | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.mode, StepMode):
@@ -73,6 +75,8 @@ class Step:
                 number(value, name)
         if self.i_abs_min is not None:
             positive(self.i_abs_min, "i_abs_min", zero=True)
+        if self.i_limit is not None:
+            positive(self.i_limit, "i_limit")
         if self.mode == StepMode.REST and self.level != 0:
             raise ValidationError("level must be zero for REST")
         if self.mode == StepMode.VOLTAGE:
@@ -80,6 +84,8 @@ class Step:
                 raise ValidationError("v_min/v_max are forbidden for VOLTAGE")
         elif self.i_abs_min is not None:
             raise ValidationError("i_abs_min is only allowed for VOLTAGE")
+        elif self.i_limit is not None:
+            raise ValidationError("i_limit is only allowed for VOLTAGE")
 
 
 @dataclass(frozen=True, slots=True)
@@ -244,6 +250,8 @@ def validate(sequence: Sequence, limits: SafetyLimits) -> None:
     for index, step in enumerate(sequence.steps):
         if step.mode == StepMode.CURRENT and abs(step.level) > limits.i_max_abs:
             raise ValidationError(f"step {index}: level exceeds i_max_abs")
+        if step.i_limit is not None and step.i_limit > limits.i_max_abs:
+            raise ValidationError(f"step {index}: i_limit exceeds i_max_abs")
         if step.mode == StepMode.VOLTAGE and not (
             limits.v_min_abs <= step.level <= limits.v_max_abs
         ):
@@ -288,7 +296,10 @@ def to_dict(obj: _Model) -> dict[str, Any]:
             return [encode(item) for item in value]
         return value
 
-    return {field.name: encode(getattr(obj, field.name)) for field in fields(obj)}
+    body = {field.name: encode(getattr(obj, field.name)) for field in fields(obj)}
+    if isinstance(obj, Step) and obj.i_limit is None:
+        del body["i_limit"]  # metadata of steps without a limit stays as before
+    return body
 
 
 def _body(d: object, cls: type[_T]) -> dict[str, Any]:
