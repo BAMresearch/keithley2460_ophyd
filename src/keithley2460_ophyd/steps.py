@@ -51,7 +51,21 @@ def rest_step(duration_s: float, sampling: Sampling) -> Step:
     return Step(StepMode.REST, 0.0, duration_s, sampling)
 
 
-def cv_step(voltage_v: float, i_abs_min: float, max_duration_s: float, sampling: Sampling) -> Step:
+def cv_step(
+    voltage_v: float,
+    i_abs_min: float,
+    max_duration_s: float,
+    sampling: Sampling,
+    i_limit: float | None = None,
+) -> Step:
+    """Hold voltage_v until |I| < i_abs_min (at most max_duration_s).
+
+    ``i_limit`` caps the current of the hold; give the preceding CC current so a
+    hold that starts away from voltage_v (its CC step ended on time) continues at
+    that current until it gets there. None leaves the session's i_max_abs.
+    """
     number(voltage_v, "voltage_v")
     positive(i_abs_min, "i_abs_min", zero=True)
-    return Step(StepMode.VOLTAGE, voltage_v, max_duration_s, sampling, i_abs_min=i_abs_min)
+    return Step(
+        StepMode.VOLTAGE, voltage_v, max_duration_s, sampling, i_abs_min=i_abs_min, i_limit=i_limit
+    )

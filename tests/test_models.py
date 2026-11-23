@@ -104,6 +104,10 @@ def test_step_numeric_types_and_finiteness(field, value):
         ({"i_abs_min": 0.001}, "i_abs_min"),
         ({"mode": StepMode.REST, "level": 0, "i_abs_min": 0.001}, "i_abs_min"),
         ({"mode": StepMode.VOLTAGE, "i_abs_min": -0.1}, "i_abs_min"),
+        ({"i_limit": 0.001}, "i_limit"),
+        ({"mode": StepMode.REST, "level": 0, "i_limit": 0.001}, "i_limit"),
+        ({"mode": StepMode.VOLTAGE, "i_limit": 0}, "i_limit"),
+        ({"mode": StepMode.VOLTAGE, "i_limit": math.nan}, "i_limit"),
     ],
 )
 def test_step_structure_signs_and_mode_specific_fields(changes, field):
@@ -386,3 +390,18 @@ def test_validate_rejects_effective_interval_below_instrument_minimum():
     step = current_step(duration_s=0.101, sampling=Sampling(0.005))
     with pytest.raises(ValidationError, match="effective interval"):
         validate(Sequence((step,)), limits)
+
+
+def test_cv_current_limit_is_checked_against_the_session_and_round_trips():
+    limits = SafetyLimits(0, 2, 0.01, 100, 1000)
+    held = cv_step(1.0, 1e-4, 10, Sampling(1), i_limit=2e-4)
+    assert held.i_limit == 2e-4
+    validate(Sequence((held,)), limits)
+    with pytest.raises(ValidationError, match="i_limit exceeds i_max_abs"):
+        validate(Sequence((held,)), replace(limits, i_max_abs=1e-4))
+    sequence = Sequence((held,))
+    assert sequence_from_dict(json.loads(json.dumps(to_dict(sequence)))) == sequence
+    # Without a limit the encoding is as before, so older metadata still decodes.
+    plain = to_dict(Sequence((cv_step(1.0, 1e-4, 10, Sampling(1)),)))
+    assert "i_limit" not in plain["steps"][0]
+    assert to_dict(held)["i_limit"] == 2e-4

@@ -67,11 +67,19 @@ Set once per run, output OFF, before building lists:
   range: current source range = smallest range ≥ max |I| of current steps;
   voltage measure range = smallest ≥ `vlimit` (a smaller measure range clamps
   the limit); for voltage steps: voltage source range = smallest ≥ max |V|
-  of voltage steps, current measure range ≥ `i_max_abs`. A 0–2.5 V window
-  (vlimit 2.6 V) therefore measures on the 7 V range.
+  of voltage steps, current measure range ≥ `i_max_abs`, or ≥ the step's
+  `i_limit` when it has one. A 0–2.5 V window (vlimit 2.6 V) therefore
+  measures on the 7 V range.
 - Compliance: current steps `vlimit = max(|v_min_abs|, |v_max_abs|) + vlimit_margin_v`
   (default 0.1 V, so the instrument-local cutoff fires before compliance shapes
-  the waveform); voltage steps `ilimit = i_max_abs`.
+  the waveform); voltage steps `ilimit = i_max_abs`, or the step's `i_limit`
+  (`cv_step(..., i_limit=)`, at most `i_max_abs`). A CV hold given the current
+  of the CC step before it continues at that current when the CC step ended on
+  its time limit away from the hold voltage, instead of jumping to it at
+  `i_max_abs` (seen 20 Nov: 100 µA after a 24 µA CC step). With a fixed
+  measure range the 2460 keeps the limit within a window of that range (5 Nov
+  probe: 105 µA became 1.06 mA on the 10 mA range), so an `i_limit` below 11 %
+  of its range is raised to 11 % (the exact minimum is unverified).
 - Auto-zero OFF for all entries, `smu.measure.autozero.once()` at prepare.
 - Readback ON (source value is measured, not the setpoint).
 - Digital lines (session config, defaults from `Keithley2460Config`): marker
@@ -172,7 +180,7 @@ takes `DELAY d → MEASURE → limit/counter blocks` per sample:
   - No step cutoffs: the absolute-window block only.
 - Voltage steps (reading = current): `LIMIT_INSIDE [−i_abs_min, i_abs_min] →
   next/stop` (CV taper). The sourced voltage is within the absolute window by
-  validation; compliance is `i_max_abs`.
+  validation; compliance is the step's `i_limit`, else `i_max_abs`.
 - "Next step" inside the repeat block is the next step of the block, or the
   repeat counter after its last step.
 - Between samples the instrument does not watch the voltage; the compliance

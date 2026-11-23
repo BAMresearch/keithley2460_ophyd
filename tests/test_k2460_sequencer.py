@@ -617,3 +617,50 @@ def test_start_on_lowest_range_gives_the_leading_rest_its_own_entry(limits):
         assert {s.range for s in program.sources} == {0.01}
     with pytest.raises(ValidationError, match="start_on_lowest_range must be bool"):
         SequencerProfile(start_on_lowest_range=1)
+
+
+def test_cv_hold_with_its_own_current_limit():
+    # CC sodiation at 24.3 uA to 5 mV, then a CV hold limited to that current
+    # (not the session's 100 uA), measured on the range of that limit.
+    limits = SafetyLimits(-0.1, 3.0, 1e-4, 1e5, 10**6)
+    sequence = Sequence(
+        (
+            cc_step(-24.3e-6, 0.005, 10, Sampling(1)),
+            cv_step(0.005, 12.2e-6, 10, Sampling(1), i_limit=24.3e-6),
+            cv_step(0.005, 12.2e-6, 10, Sampling(1)),
+        )
+    )
+    p = compile_program(sequence, limits)
+    held, plain = (p.sources[s.source_entry - 1] for s in p.steps[1:])
+    assert (held.mode, held.level, held.limit) == ("voltage", 0.005, 24.3e-6)
+    assert plain.limit == 1e-4
+    measure = [p.measures[ph.measure_entry - 1].range for ph in p.steps[1].phases]
+    assert measure == [1e-4]  # the range of 24.3 uA, the same as i_max_abs here
+    narrow = compile_program(
+        Sequence((cv_step(0.005, 1e-6, 10, Sampling(1), i_limit=5e-6),)), limits
+    )
+    assert narrow.sources[0].limit == 5e-6
+    assert narrow.measures[narrow.steps[0].phases[0].measure_entry - 1].range == 1e-5
+
+
+def test_cv_current_limit_is_raised_to_the_window_of_its_measure_range():
+    # 10.3 uA is measured on the 100 uA range, where the 2460 accepts a limit
+    # of about 10.6 % of the range or more (5 Nov probe): raised to 11 uA.
+    limits = SafetyLimits(0, 1, 1e-3, 1e5, 10**6)
+    p = compile_program(Sequence((cv_step(0.5, 1e-6, 10, Sampling(1), i_limit=10.3e-6),)), limits)
+    assert p.sources[0].limit == pytest.approx(11e-6)
+    with pytest.raises(ValidationError, match="above i_max_abs"):
+        compile_program(
+            Sequence((cv_step(0.5, 1e-6, 10, Sampling(1), i_limit=10.3e-6),)),
+            replace(limits, i_max_abs=10.5e-6),
+        )
+
+
+def test_cv_taper_above_the_hold_limit_is_allowed_up_to_i_max_abs():
+    # Resistor acceptance sheets end a hold at its first reading with a taper
+    # above the CC current; only i_max_abs bounds the taper, as before.
+    limits = SafetyLimits(0, 1, 1e-3, 1e5, 10**6)
+    p = compile_program(Sequence((cv_step(0.5, 5e-4, 10, Sampling(1), i_limit=4.5e-4),)), limits)
+    assert (p.sources[0].limit, p.steps[0].taper) == (4.5e-4, 5e-4)
+    with pytest.raises(ValidationError, match="taper"):
+        compile_program(Sequence((cv_step(0.5, 2e-3, 10, Sampling(1), i_limit=4.5e-4),)), limits)

@@ -264,6 +264,14 @@ class SequencerProgram:
         return result
 
 
+# With a fixed measure range the 2460 forces the source limit into a window
+# around it (5 Nov probe: 105 uA raised to 1.06 mA on the 10 mA range, event
+# 5076, which fails the upload check). A CV hold's own current limit is
+# therefore raised to at least this fraction of its measure range; the exact
+# minimum (about 10.6 %) is from that one probe, not from the manual.
+ILIMIT_MIN_FRACTION = 0.11
+
+
 def _range(ranges: tuple[float, ...], level: float, name: str) -> float:
     for value in ranges:
         if value >= level:
@@ -367,13 +375,25 @@ def compile_program(
     for index, step in enumerate(sequence.steps):
         mode = _source_mode(step.mode)
         is_current = mode == "current"
+        ilimit = limits.i_max_abs
+        current_measure_range = _range(profile.current_ranges_a, ilimit, "current measure")
+        if not is_current and step.i_limit is not None:
+            current_measure_range = _range(
+                profile.current_ranges_a, step.i_limit, "current measure"
+            )
+            ilimit = max(step.i_limit, ILIMIT_MIN_FRACTION * current_measure_range)
+            if ilimit > limits.i_max_abs:
+                raise ValidationError(
+                    f"step {index}: i_limit {step.i_limit:g} A needs at least {ilimit:g} A on "
+                    f"the {current_measure_range:g} A range, above i_max_abs"
+                )
         source = SourceEntry(
             mode,
             step.level,
             profile.current_ranges_a[0]
             if index == 0 and settle_first
             else (current_range if is_current else voltage_range),
-            vlimit if is_current else limits.i_max_abs,
+            vlimit if is_current else ilimit,
         )
         if source not in sources:
             sources.append(source)
@@ -384,12 +404,15 @@ def compile_program(
                 "voltage" if is_current else "current",
                 _range(profile.voltage_ranges_v, vlimit, "voltage measure")
                 if is_current
-                else _range(profile.current_ranges_a, limits.i_max_abs, "current measure"),
+                else current_measure_range,
                 phase.nplc,
             )
             if measure not in measures:
                 measures.append(measure)
             phases.append(replace(phase, measure_entry=measures.index(measure) + 1))
+        # A taper at or above the hold's own limit ends the hold at its first
+        # reading (resistor acceptance sheets use that); the runtime bounds it
+        # by i_max_abs.
         if step.i_abs_min is not None and not 0 < step.i_abs_min <= limits.i_max_abs:
             raise ValidationError(f"step {index}: runtime taper must be positive and <= i_max_abs")
         window = (
